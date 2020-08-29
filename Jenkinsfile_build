@@ -1,0 +1,53 @@
+properties([ 
+    parameters([
+    string(defaultValue: '', description: '', name: 'Application', trim: true),
+    booleanParam('PublishPackage', true, 'To publish package to nexus')
+    
+])
+])
+node('Nodename')
+{
+environmentVariables(artifact_version: "${env.BUILD_NUMBER}-${env.GIT_COMMIT}")
+stage ('SCM') {
+    script {
+    git branch: 'master, url: 'https://github.com/panjalasunny1705/CI-CD.git';
+    }
+    }
+stage('Build') {
+    sh "docker build --build-arg phase=package --build-arg application=${Application} --build-arg artifact_version=${artifact_version} -t dockerregistry/${Application}:${artifact_version} ./"  
+    }
+boolean testPassed = true
+stage('Test') {
+    try{
+    sh "docker build --build-arg phase=test --build-arg application=${Application} --build-arg artifact_version=${artifact_version} -t dockerregistry/${Application}-test:${artifact_version} ./"  
+    }catch (Exception e){
+        testPassed = false
+    }
+}
+stage('publish_nexus') {
+     if(params.PublishPackage) {
+         artifactExists = fileExists "target/${Application}-${artifact_version}-SNAPSHOT.jar";
+         if(artifactExists) {
+         pom = readMavenPom  file: "pom.xml"
+         ArtId = pom.artifactId
+         GrpId = pom.groupId
+         Pkg = pom.packaging
+         nexusArtifactUploader artifacts: [[artifactId: ArtId, classifier: '', file: "target/${Application}-${artifact_version}-SNAPSHOT.jar", type: Pkg ]], 
+         credentialsId: 'nexus-creds', 
+         groupId: GrpId, 
+         nexusUrl: 'nexus.example.com:8081', 
+         nexusVersion: 'nexus3',
+         protocol: 'http', 
+         repository: 'test-maven', 
+         version: "${artifact_version}"           
+   } else {
+    error "*** Artifact file could not be found";
+     }
+     }
+    }
+   }
+stage('Push Docker Image') {
+    if(testPassed){
+        sh "docker push dockerregistry/repo/${Application}:${artifact_version}"
+    }
+}

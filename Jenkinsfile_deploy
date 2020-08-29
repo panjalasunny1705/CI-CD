@@ -1,0 +1,64 @@
+properties([ 
+    parameters([
+    choice(choices: ['Integration', 'Staging', 'UAT', 'Prod'], description: 'Enter the environment', name: 'ENVIRONMENT')])
+    string(defaultValue: '', description: '', name: 'SERVICE', trim: true),
+    string(defaultValue: '', description: '', name: 'VERSION', trim: true),
+    booleanParam('ADDITIONAL_TEST', true, 'To publish package to nexus'),
+    string(defaultValue: '', description: 'Please provide additional test image with version', name: 'ADDITIONAL_TEST_IMAGE', trim: true)
+    
+])
+])
+wrappers {
+    timeout {
+      absolute(minutes=15)
+    }
+    timestamps()
+      credentialsBinding {
+        file('Integration', 'Integration-kubeconfig.yaml')
+        file('Staging', 'Staging-kubeconfig.yaml')
+        file('UAT', 'UAT-kubeconfig.yaml')
+        file('PROD', 'prod-kubeconfig.yaml')
+      }
+    }
+  }
+node('Nodename')
+{
+boolean preSanityStatus = true
+stage ('Pre Sanity check') {
+    try {
+    sh "export KUBECONFIG=$ENVIRONMENT && kubectl  run sanity_check docker_registry/sanitycheck:1.0.1 --ENV=${ENVIRONMENT}"
+    }
+}catch (Exception e){
+        preSanityStatus = false
+    }
+
+stage('Deploy') {
+    if(preSanityStatus){
+    sh "export KUBECONFIG=$ENVIRONMENT && helm install ${SERVICE_NAME}  --set image.repository=${SERVICE_NAME} --set image.version=${VERSION}"
+     }
+    else {
+        error "Sanity check has failed before deployment, Environment is unstable"
+    }
+}
+stage("AdditionalTest") {
+    if(param.ADDITIONAL_TEST) {
+        sh "export KUBECONFIG=$ENVIRONMENT && kubectl  run  additional_test ${ADDITIONAL_TEST_IMAGE} --ENV=${ENVIRONMENT}"
+    }
+}
+boolean postSanityStatus = false
+stage('SanityCheck') {
+    try{
+    sh "export KUBECONFIG=$ENVIRONMENT && kubectl  run sanity_check docker_registry/sanitycheck:1.0.1 --ENV=${ENVIRONMENT}"
+    }catch (Exception e){
+        postSanityStatus = true
+    }
+}
+stage('Rollback') {
+     if(postSanityStatus) {
+         sh "export KUBECONFIG=$ENVIRONMENT && helm rollback ${SERVICE_NAME} 0"
+   } 
+    }
+    }
+   }
+
+}
